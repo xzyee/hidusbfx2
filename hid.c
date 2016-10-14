@@ -1,29 +1,6 @@
 /*++
-
-Copyright (c) Microsoft Corporation.  All rights reserved.
-
-    THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY
-    KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
-    IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR
-    PURPOSE.
-
-Module Name:
-
-    hid.c
-
-Abstract:
-
-    Code for handling HID related requests
-
-Author:
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
-
+handling HID related requests
+kernel mode only
 --*/
 
 #define USE_HARDCODED_HID_REPORT_DESCRIPTOR
@@ -34,67 +11,34 @@ Revision History:
 #include "hid.tmh"
 #endif
 
-#ifdef ALLOC_PRAGMA
+#ifdef ALLOC_PRAGMA //这几个都带有page_code()字样，节省内存吧
     #pragma alloc_text( PAGE, HidFx2SetFeature)
     #pragma alloc_text( PAGE, HidFx2GetFeature)
     #pragma alloc_text( PAGE, SendVendorCommand)
     #pragma alloc_text( PAGE, GetVendorData)
 #endif
 
+//处理IRP_MJ_INTERNAL DEVICE_CONTROL
 VOID
 HidFx2EvtInternalDeviceControl(
-    IN WDFQUEUE     Queue,
+    IN WDFQUEUE     Queue, //负责I/O的
     IN WDFREQUEST   Request,
-    IN size_t       OutputBufferLength,
-    IN size_t       InputBufferLength,
+    IN size_t       OutputBufferLength, //未用
+    IN size_t       InputBufferLength, //未用
     IN ULONG        IoControlCode
     )
-/*++
-
-Routine Description:
-
-    This event is called when the framework receives 
-    IRP_MJ_INTERNAL DEVICE_CONTROL requests from the system.
-
-Arguments:
-
-    Queue - Handle to the framework queue object that is associated
-            with the I/O request.
-    Request - Handle to a framework request object.
-
-    OutputBufferLength - length of the request's output buffer,
-                        if an output buffer is available.
-    InputBufferLength - length of the request's input buffer,
-                        if an input buffer is available.
-
-    IoControlCode - the driver-defined or system-defined I/O control code
-                    (IOCTL) that is associated with the request.
-Return Value:
-
-    VOID
-
---*/
-
 {
     NTSTATUS            status = STATUS_SUCCESS;
     WDFDEVICE           device;
     PDEVICE_EXTENSION   devContext = NULL;
     ULONG               bytesReturned = 0;
 
-    UNREFERENCED_PARAMETER(OutputBufferLength);
-    UNREFERENCED_PARAMETER(InputBufferLength);
-
     device = WdfIoQueueGetDevice(Queue);
     devContext = GetDeviceContext(device);
 
-    TraceEvents(TRACE_LEVEL_INFORMATION, DBG_IOCTL,
-        "%s, Queue:0x%p, Request:0x%p\n",
-        DbgHidInternalIoctlString(IoControlCode),
-        Queue, 
-        Request
-        );
+    ...
 
-    //
+    // 认真理解吧
     // Please note that HIDCLASS provides the buffer in the Irp->UserBuffer
     // field irrespective of the ioctl buffer type. However, framework is very
     // strict about type checking. You cannot get Irp->UserBuffer by using
@@ -134,12 +78,7 @@ Return Value:
         // be retrived and completd when continuous reader reads new data
         // from the device.
         //
-        status = WdfRequestForwardToIoQueue(Request, devContext->InterruptMsgQueue);
-
-        if(!NT_SUCCESS(status)){
-            TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
-                "WdfRequestForwardToIoQueue failed with status: 0x%x\n", status);
-            
+        status = WdfRequestForwardToIoQueue(Request, devContext->...      
             WdfRequestComplete(Request, status);
         }
 
@@ -171,10 +110,8 @@ Return Value:
         status = HidFx2SendIdleNotification(Request);
 
         if (!NT_SUCCESS(status)) {
-            TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
-                "SendIdleNotification failed with status: 0x%x\n", status);
-            
-            WdfRequestComplete(Request, status);
+            ...
+            WdfRequestComplete(Request, status);//不成功要完成
         } 
         
         return;
@@ -218,12 +155,12 @@ Return Value:
     case IOCTL_HID_ACTIVATE_DEVICE:
         //
         // Makes the device ready for I/O operations.
-        //
+        // 为什么无代码？
     case IOCTL_HID_DEACTIVATE_DEVICE:
         //
         // Causes the device to cease operations and terminate all outstanding
         // I/O requests.
-        //
+        // 为什么无代码？
     default:
         status = STATUS_NOT_SUPPORTED;
         break;
@@ -240,20 +177,7 @@ HidFx2SetFeature(
     IN WDFREQUEST Request
     )
 /*++
-
-Routine Description
-
-    This routine sets the state of the Feature: in this
-    case Segment Display on the USB FX2 board.
-
-Arguments:
-
-    Request - Wdf Request 
-
-Return Value:
-
-    NT status value
-
+    This routine sets the state of the Feature: in this case Segment Display on the USB FX2 board.
 --*/
 {
     NTSTATUS                     status = STATUS_SUCCESS;
@@ -270,54 +194,29 @@ Return Value:
     device = WdfIoQueueGetDevice(WdfRequestGetIoQueue(Request));
     
     WDF_REQUEST_PARAMETERS_INIT(&params);
-    WdfRequestGetParameters(Request, &params);
+    WdfRequestGetParameters(Request, &params);//得到请求的参数，输出
 
-    //
+    // 概念：只有METHOD_NIEHTER请求才能使用wdf函数找出UserBuffer
     // IOCTL_HID_SET_FEATURE & IOCTL_HID_GET_FEATURE are not METHOD_NIEHTER
     // IOCTLs. So you cannot retreive UserBuffer from the IRP using Wdf
     // function. As a result we have to escape out to WDM to get the UserBuffer
     // directly from the IRP. 
-    //
+    // 只能从WDM的老路获得UserBuffer
     if (params.Parameters.DeviceIoControl.InputBufferLength < sizeof(HID_XFER_PACKET)) {
-        status = STATUS_BUFFER_TOO_SMALL;
-        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
-            "Userbuffer is small 0x%x\n", status);
+        //...太小
         return status;
     }
 
-    //
+    // 概念：非内核buffer的操作必须用try/catch
     // This is a kernel buffer so no need for try/except block when accesssing
     // Irp->UserBuffer.
     //
     transferPacket = (PHID_XFER_PACKET) WdfRequestWdmGetIrp(Request)->UserBuffer;
-    if (transferPacket == NULL) {
-        status = STATUS_INVALID_DEVICE_REQUEST;
-        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
-            "Irp->UserBuffer is NULL 0x%x\n", status);
-        return status;
-    }
-
-    if (transferPacket->reportBufferLen == 0){
-        status = STATUS_BUFFER_TOO_SMALL;
-        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
-            "HID_XFER_PACKET->reportBufferLen is 0, 0x%x\n", status);
-        return status;
-    }
-
-    if (transferPacket->reportBufferLen < sizeof(UCHAR)){
-        status = STATUS_BUFFER_TOO_SMALL;
-        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
-            "HID_XFER_PACKET->reportBufferLen is too small, 0x%x\n", status);
-        return status;
-    }
-
+...
     featureReport = (PHIDFX2_FEATURE_REPORT)transferPacket->reportBuffer;
     featureUsage = featureReport->FeatureData;
 
-	//
-	// The feature reports map directly to the command
-	// data that is sent down to the device.
-	//
+	//发送厂商自定义命令
 	if (transferPacket->reportId == SEVEN_SEGMENT_REPORT_ID)
 	{
         status = SendVendorCommand(
@@ -341,8 +240,7 @@ Return Value:
             "Incorrect report ID, 0x%x\n", status);
         return status;
 	}
-
-    TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "HidFx2SetFeature Exit\n");
+...
     return status;
 }
 
@@ -352,22 +250,7 @@ HidFx2GetFeature(
 	OUT PULONG BytesReturned
     )
 /*++
-
-Routine Description
-
-    This routine gets the state of the Feature: in this
-    case Segment Display or bargraph display on the USB FX2 board.
-
-Arguments:
-
-    Request - Wdf Request 
-
-	BytesReturned - Size of buffer returned for the request
-
-Return Value:
-
-    NT status value
-
+    This routine gets the state of the Feature: in this case Segment Display or bargraph display on the USB FX2 board.
 --*/
 {
     NTSTATUS                     status = STATUS_SUCCESS;
@@ -377,9 +260,7 @@ Return Value:
     WDFDEVICE                    device;
 
     PAGED_CODE();
-
-    TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "HidFx2GetFeature Enter\n");
-
+...
     *BytesReturned = 0;
 
     device = WdfIoQueueGetDevice(WdfRequestGetIoQueue(Request));
@@ -392,7 +273,7 @@ Return Value:
     // IOCTLs. So you cannot retreive UserBuffer from the IRP using Wdf
     // function. As a result we have to escape out to WDM to get the UserBuffer
     // directly from the IRP. 
-    //
+    // 为何检查Out...？
     if (params.Parameters.DeviceIoControl.OutputBufferLength < sizeof(HID_XFER_PACKET)) {
         status = STATUS_BUFFER_TOO_SMALL;
         TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
@@ -465,20 +346,7 @@ SendVendorCommand(
     IN PUCHAR CommandData
     )
 /*++
-
-Routine Description
-
-    This routine sets the state of the Feature: in this
-    case Segment Display on the USB FX2 board.
-
-Arguments:
-
-    Request - Wdf Request 
-
-Return Value:
-
-    NT status value
-
+    This routine sets the state of the Feature: in this case Segment Display on the USB FX2 board.
 --*/
 {
     NTSTATUS                     status = STATUS_SUCCESS;
@@ -531,14 +399,9 @@ Return Value:
                                                 &bytesTransferred
                                                 );
 
-    if(!NT_SUCCESS(status)) {
-        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
-            "SendtVendorCommand: Failed to set Segment Display state - 0x%x \n",
-            status);
-    } 
+    ...
 
-    TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "SendVendorCommand Exit\n");
-
+   
     return status;
 }
 
@@ -549,20 +412,7 @@ GetVendorData(
     IN PUCHAR CommandData
     )
 /*++
-
-Routine Description
-
-    This routine sets the state of the Feature: in this
-    case Segment Display on the USB FX2 board.
-
-Arguments:
-
-    Request - Wdf Request 
-
-Return Value:
-
-    NT status value
-
+    This routine sets the state of the Feature: in this case Segment Display on the USB FX2 board.
 --*/
 {
     NTSTATUS                     status = STATUS_SUCCESS;
@@ -573,9 +423,7 @@ Return Value:
     WDF_REQUEST_SEND_OPTIONS     sendOptions;
     
     PAGED_CODE();
-
-    TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "GetVendorData Enter\n");
-
+...
     pDevContext = GetDeviceContext(Device);
 
     TraceEvents(TRACE_LEVEL_INFORMATION, DBG_IOCTL,
@@ -615,19 +463,7 @@ Return Value:
                                                 &bytesTransferred
                                                 );
 
-    if(!NT_SUCCESS(status)) {
-        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
-            "GetVendorData: Failed to get state - 0x%x \n",
-            status);
-    } 
-    else
-    {
-        TraceEvents(TRACE_LEVEL_INFORMATION, DBG_IOCTL,
-            "GetVendorData: Command:0x%x, data after command: 0x%x\n", 
-            VendorCommand, *CommandData);
-    }
-
-    TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "GetVendorData Exit\n");
+    ...
 
     return status;
 }
@@ -639,22 +475,7 @@ HidFx2GetHidDescriptor(
     IN WDFREQUEST Request
     )
 /*++
-
-Routine Description:
-
-    Finds the HID descriptor and copies it into the buffer provided by the 
-    Request.
-
-Arguments:
-
-    Device - Handle to WDF Device Object
-
-    Request - Handle to request object
-
-Return Value:
-
-    NT status code.
-
+    Finds the HID descriptor and copies it into the buffer provided by the Request.
 --*/
 {
     NTSTATUS            status = STATUS_SUCCESS;
@@ -662,9 +483,6 @@ Return Value:
     WDFMEMORY           memory;
 
     UNREFERENCED_PARAMETER(Device);
-
-    TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL,
-        "HidFx2GetHidDescriptor Entry\n");
 
     //
     // This IOCTL is METHOD_NEITHER so WdfRequestRetrieveOutputMemory
@@ -676,12 +494,7 @@ Return Value:
     // internal ioctl.
     //
     status = WdfRequestRetrieveOutputMemory(Request, &memory);
-    if (!NT_SUCCESS(status)) {
-        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
-            "WdfRequestRetrieveOutputMemory failed 0x%x\n", status);
-        return status;
-    }
-
+...
     //
     // Use hardcoded "HID Descriptor" 
     //
@@ -698,19 +511,14 @@ Return Value:
                             0, // Offset
                             (PVOID) &G_DefaultHidDescriptor,
                             bytesToCopy);
-    if (!NT_SUCCESS(status)) {
-        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL,
-            "WdfMemoryCopyFromBuffer failed 0x%x\n", status);
-        return status;
-    }
+    ...
 
     //
     // Report how many bytes were copied
     //
     WdfRequestSetInformation(Request, bytesToCopy);
 
-    TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL,
-        "HidFx2GetHidDescriptor Exit = 0x%x\n", status);
+    ...
     return status;
 }
 
@@ -719,24 +527,6 @@ HidFx2GetReportDescriptor(
     IN WDFDEVICE Device,
     IN WDFREQUEST Request
     )
-/*++
-
-Routine Description:
-
-    Finds the Report descriptor and copies it into the buffer provided by the
-    Request.
-
-Arguments:
-
-    Device - Handle to WDF Device Object
-
-    Request - Handle to request object
-
-Return Value:
-
-    NT status code.
-
---*/
 {
     NTSTATUS            status = STATUS_SUCCESS;
     ULONG_PTR           bytesToCopy;
@@ -1016,5 +806,4 @@ Return Value:
         return "Unknown IOCTL";
     }
 }
-
 
