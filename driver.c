@@ -1,29 +1,6 @@
 /*++
-
-Copyright (c) Microsoft Corporation.  All rights reserved.
-
-    THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY
-    KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
-    IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR
-    PURPOSE.
-
-Module Name:
-
-    driver.c
-
-Abstract:
-
     Code for main entry point of KMDF driver
-
-Author:
-
-
-Environment:
-
     kernel mode only
-
-Revision History:
-
 --*/
 
 #include <hidusbfx2.h>
@@ -38,7 +15,7 @@ Revision History:
 // and the data types of the variables passed in for each message.  This file
 // is automatically generated and used during post-processing.
 //
-#include "driver.tmh"
+#include "driver.tmh" //位置很有讲究，请看上面解释
 #else
 ULONG DebugLevel = TRACE_LEVEL_INFORMATION;
 ULONG DebugFlag = 0xff;
@@ -51,31 +28,12 @@ ULONG DebugFlag = 0xff;
 #endif
 
 //驱动名称：HIDUSBFX2 Driver Sample
+
 NTSTATUS
 DriverEntry (
     _In_ PDRIVER_OBJECT  DriverObject,
     _In_ PUNICODE_STRING RegistryPath
     )
-/*++
-
-Routine Description:
-
-    Installable driver initialization entry point.
-    This entry point is called directly by the I/O system.
-
-Arguments:
-
-    DriverObject - pointer to the driver object
-
-    RegistryPath - pointer to a unicode string representing the path,
-                   to driver-specific key in the registry.
-
-Return Value:
-
-    STATUS_SUCCESS if successful,
-    STATUS_UNSUCCESSFUL otherwise.
-
---*/
 {
     NTSTATUS               status = STATUS_SUCCESS;
     WDF_DRIVER_CONFIG      config;
@@ -100,7 +58,7 @@ Return Value:
 
     //
     // Create a framework driver object to represent our driver.
-    //
+    // framework驱动对象是什么，存放在哪儿？透明的啊
     status = WdfDriverCreate(DriverObject,
                              RegistryPath,
                              &attributes,      // Driver Attributes
@@ -135,16 +93,6 @@ Routine Description:
     call from the PnP manager. We create and initialize a WDF device object to
     represent a new instance of toaster device.
 
-Arguments:
-
-    Driver - Handle to a framework driver object created in DriverEntry
-
-    DeviceInit - Pointer to a framework-allocated WDFDEVICE_INIT structure.
-
-Return Value:
-
-    NTSTATUS
-
 --*/
 {
     NTSTATUS                      status = STATUS_SUCCESS;
@@ -161,8 +109,7 @@ Return Value:
 
     PAGED_CODE();
 
-    TraceEvents(TRACE_LEVEL_INFORMATION, DBG_PNP,
-        "HidFx2EvtDeviceAdd called\n");
+    TraceEvents(TRACE_LEVEL_INFORMATION, DBG_PNP, "HidFx2EvtDeviceAdd called\n");
 
 	//--------------------------------------------------------------------
 	// 告诉这是一个filter driver
@@ -182,11 +129,10 @@ Return Value:
     //
     // Initialize pnp-power callbacks, attributes and a context area for the device object.
     //
-    //
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpPowerCallbacks); //本地变量
 
     //
-    // For usb devices, PrepareHardware callback is the to place select the
+    // For usb devices, PrepareHardware callback is the place to select the
     // interface and configure the device.
     //
     pnpPowerCallbacks.EvtDevicePrepareHardware = HidFx2EvtDevicePrepareHardware;//usb设备必须有，这里选择接口和配置设备
@@ -211,11 +157,7 @@ Return Value:
     // appropriate flags and attributes.
     //
     status = WdfDeviceCreate(&DeviceInit, &attributes, &hDevice/*输出，本地变量*/);
-    if (!NT_SUCCESS(status)) {
-        TraceEvents(TRACE_LEVEL_ERROR, DBG_PNP,
-            "WdfDeviceCreate failed with status code 0x%x\n", status);
-        return status;
-    }
+...
 	//问题1：创建的hDevice保存在哪里了？
 	//答案1：不用保存，贴在下一层fdo上面了
 	//问题2：取出devContext有什么用？
@@ -236,12 +178,7 @@ Return Value:
                               WDF_NO_OBJECT_ATTRIBUTES,
                               &queue
                               );
-    if (!NT_SUCCESS (status)) {
-        TraceEvents(TRACE_LEVEL_ERROR, DBG_PNP,
-            "WdfIoQueueCreate failed 0x%x\n", status);
-        return status;
-    }
-
+...
 	//--------------------------------------------------------------------
 	// 创建第二个queue，登记在devContext下面
 	//--------------------------------------------------------------------
@@ -250,7 +187,8 @@ Return Value:
     // Register a manual I/O queue for handling Interrupt Message Read Requests.
     // This queue will be used for storing Requests that need to wait for an
     // interrupt to occur before they can be completed.
-    //
+    // 概念：manual I/O queue
+
     WDF_IO_QUEUE_CONFIG_INIT(&queueConfig, WdfIoQueueDispatchManual);
 
     //
@@ -294,13 +232,9 @@ Return Value:
                             &attributes,
                             &timerHandle //输出，将来保存到devContext中
                             );
-    if (!NT_SUCCESS(status)) {
-        TraceEvents(TRACE_LEVEL_ERROR, DBG_PNP,
-            "WdfTimerCreate failed status:0x%x\n", status);
-        return status;
-    }
+...
 
-    devContext->DebounceTimer = timerHandle;
+    devContext->DebounceTimer = timerHandle; //保存起来
     return status;
 }
 
@@ -310,19 +244,7 @@ HidFx2EvtDriverContextCleanup(
     IN WDFOBJECT Object
     )
 /*++
-Routine Description:
-
-    Free resources allocated in DriverEntry that are not automatically
-    cleaned up framework.
-
-Arguments:
-
-    Driver - handle to a WDF Driver object.
-
-Return Value:
-
-    VOID.
-
+    Free resources allocated in DriverEntry that are not automatically cleaned up framework.
 --*/
 {
     PAGED_CODE ();
@@ -330,7 +252,7 @@ Return Value:
 
     TraceEvents(TRACE_LEVEL_INFORMATION, DBG_INIT, "Exit HidFx2EvtDriverContextCleanup\n");
 
-    WPP_CLEANUP(WdfDriverWdmGetDriverObject((WDFDRIVER) Object));
+    WPP_CLEANUP(WdfDriverWdmGetDriverObject((WDFDRIVER) Object));//不是framework分配的东西
 }
 
 
@@ -343,21 +265,8 @@ TraceEvents    (
     IN PCCHAR  DebugMessage,
     ...
     )
-
 /*++
-
-Routine Description:
-
-    Debug print for the sample driver.
-
-Arguments:
-
     TraceEventsLevel - print level between 0 and 3, with 3 the most verbose
-
-Return Value:
-
-    None.
-
  --*/
  {
 #if DBG
@@ -401,4 +310,3 @@ Return Value:
 }
 
 #endif
-
