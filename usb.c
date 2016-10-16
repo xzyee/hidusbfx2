@@ -105,9 +105,9 @@ Return Value:
     // because the USB stack could reconfigure the device on restart.
     //
     if (devContext->UsbDevice == NULL) {
-        status = WdfUsbTargetDeviceCreate(Device,
+        status = WdfUsbTargetDeviceCreate(Device,//这是个？
                                           WDF_NO_OBJECT_ATTRIBUTES,
-                                          &devContext->UsbDevice);
+                                          &devContext->UsbDevice);//保存在此
   
         if (!NT_SUCCESS(status)) {
             TraceEvents(TRACE_LEVEL_ERROR, DBG_PNP,
