@@ -105,7 +105,7 @@ Return Value:
     // because the USB stack could reconfigure the device on restart.
     //
     if (devContext->UsbDevice == NULL) {
-        status = WdfUsbTargetDeviceCreate(Device,//这是个？
+        status = WdfUsbTargetDeviceCreate(Device,//这是个？driver.c里面创建的hDevice
                                           WDF_NO_OBJECT_ATTRIBUTES,
                                           &devContext->UsbDevice);//保存在此
   
