@@ -1,102 +1,227 @@
 /*++
-
-Copyright (c) Microsoft Corporation.  All rights reserved.
-
-    THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY
-    KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
-    IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR
-    PURPOSE.
-
-Module Name:
-
-    TRACE.h
-
-Abstract:
-
-    Header file for the debug tracing related function defintions and macros.
-
-Environment:
-
-    Kernel mode
-
+    HidKmdf.C
+    Hid miniport to be used as an upper layer for supporting
+    KMDF based driver for HID devices.
 --*/
 
-#include <evntrace.h> // For TRACE_LEVEL definitions
+#include <wdm.h>
 
-#if !defined(EVENT_TRACING)
+#pragma warning(disable:4201)  // suppress nameless struct/union warning
+#pragma warning(disable:4214)  // suppress bit field types other than int warning
+#include <hidport.h>
+
+#pragma warning(default:4201)  // suppress nameless struct/union warning
+#pragma warning(default:4214)  // suppress bit field types other than int warning
+
+#define GET_NEXT_DEVICE_OBJECT(DO) \
+    (((PHID_DEVICE_EXTENSION)(DO)->DeviceExtension)->NextDeviceObject)
+
 
 //
-// TODO: These defines are missing in evntrace.h
-// in some DDK build environments (XP).
+// This type of function declaration is for Prefast for drivers. 
+// Because this declaration specifies the function type, PREfast for Drivers
+// does not need to infer the type or to report an inference. The declaration
+// also prevents PREfast for Drivers from misinterpreting the function type 
+// and applying inappropriate rules to the function. For example, PREfast for
+// Drivers would not apply rules for completion routines to functions of type
+// DRIVER_CANCEL. The preferred way to avoid Warning 28101 is to declare the
+// function type explicitly. In the following example, the DriverEntry function
+// is declared to be of type DRIVER_INITIALIZE.
 //
-#if !defined(TRACE_LEVEL_NONE)
-  #define TRACE_LEVEL_NONE        0
-  #define TRACE_LEVEL_CRITICAL    1
-  #define TRACE_LEVEL_FATAL       1
-  #define TRACE_LEVEL_ERROR       2
-  #define TRACE_LEVEL_WARNING     3
-  #define TRACE_LEVEL_INFORMATION 4
-  #define TRACE_LEVEL_VERBOSE     5
-  #define TRACE_LEVEL_RESERVED6   6
-  #define TRACE_LEVEL_RESERVED7   7
-  #define TRACE_LEVEL_RESERVED8   8
-  #define TRACE_LEVEL_RESERVED9   9
+DRIVER_INITIALIZE     DriverEntry;
+DRIVER_ADD_DEVICE     HidKmdfAddDevice;
+_Dispatch_type_(IRP_MJ_OTHER)
+DRIVER_DISPATCH       HidKmdfPassThrough;
+_Dispatch_type_(IRP_MJ_POWER)
+DRIVER_DISPATCH       HidKmdfPowerPassThrough;
+DRIVER_UNLOAD         HidKmdfUnload;
+
+#ifdef ALLOC_PRAGMA
+#pragma alloc_text( INIT, DriverEntry )
+#pragma alloc_text( PAGE, HidKmdfAddDevice )
+#pragma alloc_text( PAGE, HidKmdfUnload )
 #endif
 
+NTSTATUS
+DriverEntry (
+    _In_ PDRIVER_OBJECT  DriverObject,
+    _In_ PUNICODE_STRING RegistryPath
+    )
+/*++
 
-//
-// Define Debug Flags
-//
-#define DBG_INIT                0x00000001
-#define DBG_PNP                 0x00000002
-#define DBG_IOCTL               0x00000004
+Routine Description:
+
+    Installable driver initialization entry point.
+    This entry point is called directly by the I/O system.
+
+Arguments:
+
+    DriverObject - pointer to the driver object
+
+    RegistryPath - pointer to a unicode string representing the path,
+                   to driver-specific key in the registry.
+
+Return Value:
+
+    STATUS_SUCCESS if successful,
+    STATUS_UNSUCCESSFUL otherwise.
+
+--*/
+{
+    HID_MINIDRIVER_REGISTRATION hidMinidriverRegistration;
+    NTSTATUS status;
+    ULONG i;
+
+    KdPrint(("Enter DriverEntry()\n"));
+
+ //---------------------------------------------------------------
+ //第一部分：填充回调函数，基本上是pass through
+ //---------------------------------------------------------------
+ 
+    //
+    // Initialize the dispatch table to pass through all the IRPs.
+    //
+    for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
+        DriverObject->MajorFunction[i] = HidKmdfPassThrough;
+    }
+
+    //
+    // Special case power irps so that we call PoCallDriver instead of IoCallDriver
+    // when sending the IRP down the stack.
+    //
+    DriverObject->MajorFunction[IRP_MJ_POWER] = HidKmdfPowerPassThrough;
+
+
+    DriverObject->DriverExtension->AddDevice = HidKmdfAddDevice;//在下面
+    DriverObject->DriverUnload = HidKmdfUnload;
+
+ //---------------------------------------------------------------
+ //第二部分：Register with hidclass
+ //---------------------------------------------------------------
+ 
+ 
+    RtlZeroMemory(&hidMinidriverRegistration,
+                  sizeof(hidMinidriverRegistration));
+
+    //
+    // Revision must be set to HID_REVISION by the minidriver
+    //
+    hidMinidriverRegistration.Revision            = HID_REVISION;
+    hidMinidriverRegistration.DriverObject        = DriverObject;
+    hidMinidriverRegistration.RegistryPath        = RegistryPath;
+    hidMinidriverRegistration.DeviceExtensionSize = 0;
+
+    //
+    // if "DevicesArePolled" is False then the hidclass driver does not do
+    // polling and instead reuses a few Irps (ping-pong) if the device has
+    // an Input item. Otherwise, it will do polling at regular interval. USB
+    // HID devices do not need polling by the HID classs driver. Some leagcy
+    // devices may need polling.
+    //
+    hidMinidriverRegistration.DevicesArePolled = FALSE;
+
+    //
+    // Register with hidclass
+    //
+    status = HidRegisterMinidriver(&hidMinidriverRegistration);//
+    if (!NT_SUCCESS(status) ){
+        KdPrint(("HidRegisterMinidriver FAILED, returnCode=%x\n", status));
+    }
+
+    return status;
+}
+
+//为什么我们不需要创建一个设备对象，并把设备对象贴到PDO？
+NTSTATUS
+HidKmdfAddDevice(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ PDEVICE_OBJECT FunctionalDeviceObject
+    )
+/*++
+
+Routine Description:
+
+    HidClass Driver calls our AddDevice routine after creating an FDO for us.
+    We do not need to create a device object or attach it to the PDO.
+    Hidclass driver will do it for us.
+
+Arguments:
+
+    DriverObject - pointer to the driver object.
+
+    FunctionalDeviceObject -  pointer to the FDO created by the
+                            Hidclass driver for us.
+
+Return Value:
+
+    NT status code.
+
+--*/
+{
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(DriverObject);
+
+
+    FunctionalDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+HidKmdfPassThrough(
+    _In_    PDEVICE_OBJECT  DeviceObject,
+    _Inout_ PIRP            Irp
+    )
+/*++
+    Pass through routine for all the IRPs except power.
+--*/
+{
+    //
+    // Copy current stack to next instead of skipping. We do this to preserve 
+    // current stack information provided by hidclass driver to the minidriver
+    //
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    return IoCallDriver(GET_NEXT_DEVICE_OBJECT(DeviceObject), Irp);
+}
+
+
+NTSTATUS
+HidKmdfPowerPassThrough(
+    _In_    PDEVICE_OBJECT  DeviceObject,
+    _Inout_ PIRP            Irp
+    )
+/*++
+    Pass through routine for power IRPs .
+--*/
+{
+    //
+    // Must start the next power irp before skipping to the next stack location
+    //
+    PoStartNextPowerIrp(Irp);//多了个这句
+
+    //
+    // Copy current stack to next instead of skipping. We do this to preserve 
+    // current stack information provided by hidclass driver to the minidriver
+    //
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    return PoCallDriver(GET_NEXT_DEVICE_OBJECT(DeviceObject), Irp);
+}
+
 
 VOID
-TraceEvents    (
-    IN ULONG   DebugPrintLevel,
-    IN ULONG   DebugPrintFlag,
-    IN PCCHAR  DebugMessage,
-    ...
-    );
+HidKmdfUnload(
+    _In_ PDRIVER_OBJECT DriverObject
+    )
+/*++
+    Free all the allocated resources, etc.
+--*/
+{
+    UNREFERENCED_PARAMETER(DriverObject);
 
-#define WPP_INIT_TRACING(DriverObject, RegistryPath)
-#define WPP_CLEANUP(DriverObject)
+    PAGED_CODE ();
 
-#else
-//
-// If software tracing is defined in the sources file..
-// WPP_DEFINE_CONTROL_GUID specifies the GUID used for this driver.
-// *** REPLACE THE GUID WITH YOUR OWN UNIQUE ID ***
-// WPP_DEFINE_BIT allows setting debug bit masks to selectively print.
-// The names defined in the WPP_DEFINE_BIT call define the actual names
-// that are used to control the level of tracing for the control guid
-// specified.
-//
-// NOTE: If you are adopting this sample for your driver, please generate
-//       a new guid, using tools\other\i386\guidgen.exe present in the
-//       DDK.
-//
-//    Name of the logger is HidUsbFx2 and the guid is
-//   {D23A0C5A-D307-4f0e-AE8E-E2A355AD5DAC}
-//   (0xd23a0c5a, 0xd307, 0x4f0e, 0xae, 0x8e, 0xe2, 0xa3, 0x55, 0xad, 0x5d, 0xac);
-//
+    return;
+}
 
-#define WPP_CHECK_FOR_NULL_STRING  //to prevent exceptions due to NULL strings
-
-#define WPP_CONTROL_GUIDS \
-    WPP_DEFINE_CONTROL_GUID(HidUsbFx2TraceGuid,(d23a0c5a,d307,4f0e,ae8e,E2A355AD5DAC), \
-        WPP_DEFINE_BIT(DBG_INIT)             /* bit  0 = 0x00000001 */ \
-        WPP_DEFINE_BIT(DBG_PNP)              /* bit  1 = 0x00000002 */ \
-        WPP_DEFINE_BIT(DBG_IOCTL)            /* bit  2 = 0x00000004 */ \
- /* You can have up to 32 defines. If you want more than that,\
-   you have to provide another trace control GUID */\
-        )
-
-
-#define WPP_LEVEL_FLAGS_LOGGER(lvl,flags) WPP_LEVEL_LOGGER(flags)
-#define WPP_LEVEL_FLAGS_ENABLED(lvl, flags) (WPP_LEVEL_ENABLED(flags) && WPP_CONTROL(WPP_BIT_ ## flags).Level  >= lvl)
-
-
-#endif
-
-
+//The HidRegisterMinidriver routine is called by HID minidrivers, during their initialization, to register with the HID class driver.
